@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.*;
 
+import com.oracle.jrockit.jfr.DataType;
+
 import ghidra.app.util.Option;
 import ghidra.app.util.bin.ByteProvider;
 import ghidra.app.util.bin.BinaryReader;
@@ -422,7 +424,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		"MmDbgQueryAvailablePages",             // 376
 		"MmDbgReleaseAddress",                  // 377
 		"MmDbgWriteCheck",                      // 378
-		};
+	};
 
 
 	@Override
@@ -444,7 +446,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		BinaryReader reader = new BinaryReader(provider, true);
 		if (reader.readNextAsciiString(4).equals("XBEH")) {
 			loadSpecs.add(new LoadSpec(this, 0,
-				new LanguageCompilerSpecPair("x86:LE:32:default", "windows"), true));
+					new LanguageCompilerSpecPair("x86:LE:32:default", "windows"), true));
 		}
 
 		return loadSpecs;
@@ -456,11 +458,11 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 			throws CancelledException, IOException {
 		BinaryReader reader = new BinaryReader(provider, true);
 		FlatProgramAPI api = new FlatProgramAPI(program, monitor);
-		
+
 		FileBytes fileBytes;
 		String x = "Xbox";
 		try (InputStream fileIn = reader.getInputStream();
-			MonitoredInputStream mis = new MonitoredInputStream(fileIn, monitor)) {
+				MonitoredInputStream mis = new MonitoredInputStream(fileIn, monitor)) {
 			// Indicate that cleanup is not neccessary for cancelled import operation.
 			mis.setCleanupOnCancel(false);
 			fileBytes = program.getMemory().createFileBytes(x, 0, provider.length(), mis, monitor);
@@ -478,7 +480,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		reader.setPointerIndex(0);
 		createSection(api, "headers", reader,
 				header.baseAddr, header.headersSize,
-				0, header.headersSize, false, false);
+				0, header.headersSize, false, false, fileBytes);
 
 		long entry = header.entryAddr;
 
@@ -525,7 +527,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 			createSection(api, name, reader,
 					secHdr.virtualAddr, secHdr.virtualSize,
 					secHdr.rawAddr, secHdr.rawSize, (secHdr.flags & secHdr.FLAG_WRITABLE) != 0,
-					(secHdr.flags & secHdr.FLAG_EXECUTABLE) != 0);
+					(secHdr.flags & secHdr.FLAG_EXECUTABLE) != 0, fileBytes);
 
 			DataType secHdrDT = secHdr.toDataType();
 			createStruct(api, log, secHdrDT, header.sectionHeadersAddr + i * secHdrDT.getLength());
@@ -582,15 +584,33 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		}
 	}
 
-	private void createSection(FlatProgramAPI api, String name, BinaryReader input, long vaddr, long vlen, long off, long len, boolean write, boolean exec)
-	{
+	private void createSection(FlatProgramAPI api, String name, BinaryReader input, long vaddr, long vlen, long off,
+			long len, boolean write, boolean exec, FileBytes fileBytes) {
 		try {
-			// Read in section data and blank difference
-			byte[] data = input.readByteArray(off, (int)len);
-			data = Arrays.copyOf(data, (int)vlen);
+			Address addr = api.toAddr(vaddr);
+			MemoryBlock sec;
 
-			// Create the memory block
-			MemoryBlock sec = api.createMemoryBlock(name, api.toAddr(vaddr), data, false);
+			if (len > 0) {
+				// Create block backed by file bytes
+				sec = api.getCurrentProgram().getMemory().createInitializedBlock(
+						name, addr, fileBytes, off, len, false);
+
+				// If virtual size is larger than raw size, extend with uninitialized block
+				if (vlen > len) {
+					Address uninitAddr = addr.add(len);
+					long uninitSize = vlen - len;
+					MemoryBlock uninitSec = api.getCurrentProgram().getMemory().createUninitializedBlock(
+							name + "_uninit", uninitAddr, uninitSize, false);
+					uninitSec.setExecute(exec);
+					uninitSec.setRead(true);
+					uninitSec.setWrite(write);
+				}
+			} else {
+				// Create uninitialized block if no raw data
+				sec = api.getCurrentProgram().getMemory().createUninitializedBlock(
+						name, addr, vlen, false);
+			}
+
 			sec.setExecute(exec);
 			sec.setRead(true);
 			sec.setWrite(write);
@@ -648,7 +668,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 					symbolTable.createLabel(address, importName, SourceType.IMPORTED);
 					listing.createData(address, new PointerDataType(), 4);
 					refManager.addExternalReference(address, "xboxkrnl.exe",
-						importName, extAddr, SourceType.IMPORTED, 0, RefType.DATA);
+							importName, extAddr, SourceType.IMPORTED, 0, RefType.DATA);
 				}
 				catch (DuplicateNameException e) {
 					log.appendMsg("External location not created: " + e.getMessage());
