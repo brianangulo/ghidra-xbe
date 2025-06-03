@@ -1,7 +1,6 @@
 package xbeloader;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.*;
 
 import ghidra.app.util.Option;
@@ -24,15 +23,14 @@ import ghidra.program.model.reloc.RelocationTable;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.util.AddressSetPropertyMap;
 import ghidra.util.*;
-import ghidra.util.Msg;
 import ghidra.util.exception.*;
 import ghidra.util.task.TaskMonitor;
-import ghidra.util.MonitoredInputStream;
 import ghidra.program.flatapi.*;
-import ghidra.program.database.mem.*;
+import ghidra.util.Msg;
 import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.model.util.CodeUnitInsertionException;
 import ghidra.program.model.data.PointerDataType;
+
 
 /**
  * TODO: Provide class-level documentation that describes what this loader does.
@@ -41,6 +39,8 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 	public static String XBE_NAME = "Xbox Executable Format (XBE)";
 	public XbeImageHeader header;
 	List<XbeSectionHeader> sectionHeaders;
+	boolean isDebug;
+	private Program program;
 	private Address kernelThunkTableAddr;
 	private static String[] kernelExports = {
 		"",                                     // 0
@@ -422,7 +422,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		"MmDbgQueryAvailablePages",             // 376
 		"MmDbgReleaseAddress",                  // 377
 		"MmDbgWriteCheck",                      // 378
-	};
+		};
 
 
 	@Override
@@ -444,7 +444,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		BinaryReader reader = new BinaryReader(provider, true);
 		if (reader.readNextAsciiString(4).equals("XBEH")) {
 			loadSpecs.add(new LoadSpec(this, 0,
-					new LanguageCompilerSpecPair("x86:LE:32:default", "windows"), true));
+				new LanguageCompilerSpecPair("x86:LE:32:default", "windows"), true));
 		}
 
 		return loadSpecs;
@@ -456,15 +456,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 			throws CancelledException, IOException {
 		BinaryReader reader = new BinaryReader(provider, true);
 		FlatProgramAPI api = new FlatProgramAPI(program, monitor);
-
-		FileBytes fileBytes;
-		String x = "Xbox";
-		try (InputStream fileIn = reader.getInputStream();
-				MonitoredInputStream mis = new MonitoredInputStream(fileIn, monitor)) {
-			// Indicate that cleanup is not neccessary for cancelled import operation.
-			mis.setCleanupOnCancel(false);
-			fileBytes = program.getMemory().createFileBytes(x, 0, provider.length(), mis, monitor);
-		}
+		this.program = program;
 
 		// Read XBE header
 		header = new XbeImageHeader(reader);
@@ -478,7 +470,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		reader.setPointerIndex(0);
 		createSection(api, "headers", reader,
 				header.baseAddr, header.headersSize,
-				0, header.headersSize, false, false, fileBytes);
+				0, header.headersSize, false, false);
 
 		long entry = header.entryAddr;
 
@@ -507,7 +499,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		try {
 			program.getSymbolTable().createLabel(entryAddr, "entry", SourceType.IMPORTED);
 			program.getSymbolTable().addExternalEntryPoint(entryAddr);
-			createOneByteFunction("entry", entryAddr, program);
+			createOneByteFunction("entry", entryAddr);
 		} catch (Exception e) {
 			Msg.error(this, e.getMessage());
 		}
@@ -525,7 +517,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 			createSection(api, name, reader,
 					secHdr.virtualAddr, secHdr.virtualSize,
 					secHdr.rawAddr, secHdr.rawSize, (secHdr.flags & secHdr.FLAG_WRITABLE) != 0,
-					(secHdr.flags & secHdr.FLAG_EXECUTABLE) != 0, fileBytes);
+					(secHdr.flags & secHdr.FLAG_EXECUTABLE) != 0);
 
 			DataType secHdrDT = secHdr.toDataType();
 			createStruct(api, log, secHdrDT, header.sectionHeadersAddr + i * secHdrDT.getLength());
@@ -582,32 +574,15 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		}
 	}
 
-	private void createSection(FlatProgramAPI api, String name, BinaryReader input, long vaddr, long vlen, long off,
-			long len, boolean write, boolean exec, FileBytes fileBytes) {
+	private void createSection(FlatProgramAPI api, String name, BinaryReader input, long vaddr, long vlen, long off, long len, boolean write, boolean exec)
+	{
 		try {
-			Address addr = api.toAddr(vaddr);
-			MemoryBlock sec;
+			// Read in section data and blank difference
+			byte[] data = input.readByteArray(off, (int)len);
+			data = Arrays.copyOf(data, (int)vlen);
 
-			if (len > 0) {
-				sec = api.getCurrentProgram().getMemory().createInitializedBlock(
-						name, addr, fileBytes, off, len, false);
-
-				// If virtual size is larger than raw size, extend with uninitialized block
-				if (vlen > len) {
-					Address uninitAddr = addr.add(len);
-					long uninitSize = vlen - len;
-					MemoryBlock uninitSec = api.getCurrentProgram().getMemory().createUninitializedBlock(
-							name + "_uninit", uninitAddr, uninitSize, false);
-					uninitSec.setExecute(exec);
-					uninitSec.setRead(true);
-					uninitSec.setWrite(write);
-				}
-			} else {
-				// Create uninitialized block if no raw data
-				sec = api.getCurrentProgram().getMemory().createUninitializedBlock(
-						name, addr, vlen, false);
-			}
-
+			// Create the memory block
+			MemoryBlock sec = api.createMemoryBlock(name, api.toAddr(vaddr), data, false);
 			sec.setExecute(exec);
 			sec.setRead(true);
 			sec.setWrite(write);
@@ -665,7 +640,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 					symbolTable.createLabel(address, importName, SourceType.IMPORTED);
 					listing.createData(address, new PointerDataType(), 4);
 					refManager.addExternalReference(address, "xboxkrnl.exe",
-							importName, extAddr, SourceType.IMPORTED, 0, RefType.DATA);
+						importName, extAddr, SourceType.IMPORTED, 0, RefType.DATA);
 				}
 				catch (DuplicateNameException e) {
 					log.appendMsg("External location not created: " + e.getMessage());
@@ -690,7 +665,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 	 * @param name the name of the function
 	 * @param address location to create the function
 	 */
-	void createOneByteFunction(String name, Address address, Program program) {
+	void createOneByteFunction(String name, Address address) {
 		FunctionManager functionMgr = program.getFunctionManager();
 		if (functionMgr.getFunctionAt(address) != null) {
 			return;
