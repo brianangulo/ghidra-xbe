@@ -591,7 +591,6 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 			MemoryBlock sec;
 
 			if (len > 0) {
-				// Create block backed by file bytes
 				sec = api.getCurrentProgram().getMemory().createInitializedBlock(
 						name, addr, fileBytes, off, len, false);
 
