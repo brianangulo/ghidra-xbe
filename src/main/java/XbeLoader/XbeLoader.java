@@ -574,19 +574,33 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		}
 	}
 
-	private void createSection(FlatProgramAPI api, String name, BinaryReader input, long vaddr, long vlen, long off, long len, boolean write, boolean exec)
-	{
+	private void createSection(FlatProgramAPI api, String name, BinaryReader input,
+							long vaddr, long vlen, long off, long len,
+							boolean write, boolean exec) {
 		try {
-			// Read in section data and blank difference
+			// Read exactly the raw bytes from the file.
 			byte[] data = input.readByteArray(off, (int)len);
-			data = Arrays.copyOf(data, (int)vlen);
 
-			// Create the memory block
+			// Create a block for just those 'len' bytes.
 			MemoryBlock sec = api.createMemoryBlock(name, api.toAddr(vaddr), data, false);
 			sec.setExecute(exec);
 			sec.setRead(true);
 			sec.setWrite(write);
-		} catch (Exception e) {
+
+			// OPTIONAL: If you still want to reserve the uninitialized gap up to vlen,
+			// uncomment the following lines:
+			/*
+			if (vlen > len) {
+				Address bssStart = api.toAddr(vaddr + len);
+				long bssSize = vlen - len;
+				MemoryBlock bss = api.createUninitializedBlock(name + "_bss", bssStart, bssSize, false);
+				bss.setExecute(exec);
+				bss.setRead(true);
+				bss.setWrite(write);
+			}
+			*/
+		}
+		catch (Exception e) {
 			Msg.error(this, e.getMessage());
 		}
 	}
