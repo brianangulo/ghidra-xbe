@@ -589,7 +589,7 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 
 			// OPTIONAL: If you still want to reserve the uninitialized gap up to vlen,
 			// uncomment the following lines:
-			/*
+			
 			if (vlen > len) {
 				Address bssStart = api.toAddr(vaddr + len);
 				long bssSize = vlen - len;
@@ -598,7 +598,6 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 				bss.setRead(true);
 				bss.setWrite(write);
 			}
-			*/
 		}
 		catch (Exception e) {
 			Msg.error(this, e.getMessage());
