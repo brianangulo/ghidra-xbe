@@ -504,7 +504,6 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 			Msg.error(this, e.getMessage());
 		}
 
-		// Read sections headers
 		reader.setPointerIndex(header.sectionHeadersAddr - header.baseAddr);
 		for (int i = 0; i < (int)header.sectionCount; i++) {
 			XbeSectionHeader secHdr = new XbeSectionHeader(reader);
@@ -512,11 +511,16 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 
 			// Get section name
 			String name = reader.readAsciiString(secHdr.sectionNameAddr - header.baseAddr);
+			
+			// Debug logging to verify sizes
+			Msg.info(this, String.format("Section %s: VirtAddr=0x%X, VirtSize=0x%X, RawAddr=0x%X, RawSize=0x%X", 
+				name, secHdr.virtualAddr, secHdr.virtualSize, secHdr.rawAddr, secHdr.rawSize));
 
-			// Read section data
+			// Read section data - make sure we're using the correct sizes
 			createSection(api, name, reader,
 					secHdr.virtualAddr, secHdr.virtualSize,
-					secHdr.rawAddr, secHdr.rawSize, (secHdr.flags & secHdr.FLAG_WRITABLE) != 0,
+					secHdr.rawAddr, secHdr.rawSize, 
+					(secHdr.flags & secHdr.FLAG_WRITABLE) != 0,
 					(secHdr.flags & secHdr.FLAG_EXECUTABLE) != 0);
 
 			DataType secHdrDT = secHdr.toDataType();
@@ -574,33 +578,28 @@ public class XbeLoader extends AbstractLibrarySupportLoader {
 		}
 	}
 
-	private void createSection(FlatProgramAPI api, String name, BinaryReader input,
-							long vaddr, long vlen, long off, long len,
-							boolean write, boolean exec) {
+	// Replace your existing createSection method with this fixed version:
+	private void createSection(FlatProgramAPI api, String name, BinaryReader input, long vaddr, long vlen, long off, long len, boolean write, boolean exec)
+	{
 		try {
-			// Read exactly the raw bytes from the file.
-			byte[] data = input.readByteArray(off, (int)len);
-
-			// Create a block for just those 'len' bytes.
+			// Only read the actual raw size from file, not virtual size
+			byte[] data = new byte[(int)Math.max(len, vlen)];
+			
+			// Read the raw data from file if len > 0
+			if (len > 0) {
+				byte[] rawData = input.readByteArray(off, (int)len);
+				System.arraycopy(rawData, 0, data, 0, (int)len);
+			}
+			
+			// The rest of the virtual space is already zeroed by default
+			// If virtual size is larger than raw size, keep the extra bytes as zeros
+			
+			// Create the memory block with the correct virtual size
 			MemoryBlock sec = api.createMemoryBlock(name, api.toAddr(vaddr), data, false);
 			sec.setExecute(exec);
 			sec.setRead(true);
 			sec.setWrite(write);
-
-			// OPTIONAL: If you still want to reserve the uninitialized gap up to vlen,
-			// uncomment the following lines:
-			/*
-			if (vlen > len) {
-				Address bssStart = api.toAddr(vaddr + len);
-				long bssSize = vlen - len;
-				MemoryBlock bss = api.createUninitializedBlock(name + "_bss", bssStart, bssSize, false);
-				bss.setExecute(exec);
-				bss.setRead(true);
-				bss.setWrite(write);
-			}
-			*/
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			Msg.error(this, e.getMessage());
 		}
 	}
